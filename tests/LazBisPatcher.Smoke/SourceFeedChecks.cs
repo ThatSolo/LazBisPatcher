@@ -29,6 +29,9 @@ internal static class SourceFeedChecks
             .Replace("version = '1.0.1'", "version = '1.0.2'", StringComparison.Ordinal));
         handler.Commits[invalid] = original.ToDictionary();
         handler.Commits[invalid]["init.lua"] = "-- local meta = {version = '9.9'}\nlocal meta = {version = getVersion()}"u8.ToArray();
+        handler.Notes[first] = "1.0 (official)\n- official first notes\n\n3.5.0\n- unrelated upstream notes"u8.ToArray();
+        handler.Notes[second] = "1.0.1\n- intended update notes\n\n1.0\n- previous notes"u8.ToArray();
+        handler.Notes[later] = "1.0.2\n- later branch notes"u8.ToArray();
 
         Require(LazBisSourceRules.ReadVersion("--[=[local meta={version='9.9'}]=]\nlocal meta={name='x', version=\"1.0.1\"}"u8.ToArray()) == "1.0.1", "literal parser skips comments");
         await Refuses(() => Task.Run(() => LazBisSourceRules.ReadVersion("local meta={version='1.0' .. '.1'}"u8.ToArray())), "meta.version");
@@ -38,12 +41,16 @@ internal static class SourceFeedChecks
         handler.Main = first;
         var v1 = await feed.CheckAsync(Product.LazBis, default);
         Require(v1.Tag == "1.0" && v1.Version == new Version(1, 0, 0) && v1.Source?.Commit == first, "main 1.0 identity");
+        Require(v1.Notes.Contains("official first notes", StringComparison.Ordinal) && !v1.Notes.Contains("unrelated", StringComparison.Ordinal), "matching plain changelog section only");
         (await installer.PrepareAsync(feed, v1, default)).Apply();
         Require(installer.Inspect()?.Hashes.Count == 13, "source install ownership");
 
         handler.Main = second;
+        handler.MoveMainOnNotes = later;
         var v2 = await feed.CheckAsync(Product.LazBis, default);
+        handler.MoveMainOnNotes = null;
         Require(v2.Tag == "1.0.1" && v2.Version == new Version(1, 0, 1), "main version bump");
+        Require(handler.Main == later && v2.Source?.Commit == second && v2.Notes.Contains("intended update notes", StringComparison.Ordinal), "notes stay on selected commit while main moves");
         Require(LazBisInstaller.SelectForInstall(v2, installer.Inspect()) == v2, "version bump offers update");
         handler.Main = later;
         var downloadStart = handler.Requests.Count;
@@ -101,6 +108,33 @@ internal static class SourceFeedChecks
         Require(File.ReadAllBytes(statePath).SequenceEqual(before), "failed reads preserve state");
         VerifySentinels(sentinels);
         Console.WriteLine("PASS unreadable version, unavailable pinned source and corrupt blob fail clearly before installation");
+
+        handler.Main = second;
+        foreach (var kind in new[] { "missing-file", "missing-entry", "bad-blob", "unavailable", "oversize" })
+        {
+            var notes = handler.Notes[second];
+            if (kind == "missing-file") handler.Notes.Remove(second);
+            if (kind == "missing-entry") handler.Notes[second] = "9.9.9\n- no matching version"u8.ToArray();
+            handler.CorruptPath = kind == "bad-blob" ? "CHANGELOG" : null;
+            handler.NotesUnavailable = kind == "unavailable";
+            handler.OversizeNotes = kind == "oversize";
+            var available = await feed.CheckAsync(Product.LazBis, default);
+            Require(available.Version == new Version(1, 0, 1) && available.Source?.Commit == second &&
+                available.Notes == LazBisSourceFeed.GenericNotes && available.Source.Files.Length == 13, "optional notes fallback " + kind);
+            handler.Notes[second] = notes;
+            handler.CorruptPath = null;
+            handler.NotesUnavailable = handler.OversizeNotes = false;
+        }
+        Require(!LazBisPackage.Paths.Contains("CHANGELOG"), "notes never become installed ownership");
+        using (var cancelledNotes = new CancellationTokenSource())
+        {
+            handler.CancelOnNotes = cancelledNotes;
+            var available = await feed.CheckAsync(Product.LazBis, cancelledNotes.Token);
+            Require(cancelledNotes.IsCancellationRequested && available.Notes == LazBisSourceFeed.GenericNotes && available.Version == new Version(1, 0, 1),
+                "cancellation during optional notes keeps verified update available");
+            handler.CancelOnNotes = null;
+        }
+        Console.WriteLine("PASS verified matching CHANGELOG entry, moved-main note pin, missing file/entry, bad blob, unavailable or oversized notes fall back without blocking valid update");
 
         // Reproduce an old JSON record with no source field, not a new source install.
         var legacyRoot = CreateRoot(fixture, "LegacyRecord");
@@ -177,8 +211,9 @@ internal static class SourceFeedChecks
             (await installer.PrepareAsync(feed, release, deadline.Token)).Apply();
             var recorded = installer.Inspect()!;
             Require(recorded.Release.Source?.Commit == release.Source?.Commit && recorded.Hashes.Count == 13, "live commit identity");
+            Require(!recorded.Hashes.ContainsKey("CHANGELOG") && !File.Exists(Path.Combine(mq, "lua", "lazbis", "CHANGELOG")), "live optional notes never installed");
             VerifySentinels(sentinels);
-            Console.WriteLine($"PASS live ThatSolo/lazbis main {release.Tag}, commit {release.Source!.Commit}, 13 verified files installed; player files preserved");
+            Console.WriteLine($"PASS live ThatSolo/lazbis main {release.Tag}, commit {release.Source!.Commit}, 13 verified files installed; player files preserved; verified version notes available: {release.Notes != LazBisSourceFeed.GenericNotes}");
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -223,6 +258,7 @@ internal static class SourceFeedChecks
     private sealed class SourceHandler(byte[] legacyZip) : HttpMessageHandler
     {
         internal Dictionary<string, Dictionary<string, byte[]>> Commits { get; } = [];
+        internal Dictionary<string, byte[]> Notes { get; } = [];
         internal List<string> Requests { get; } = [];
         internal string Main = "";
         internal string? Unavailable;
@@ -230,6 +266,10 @@ internal static class SourceFeedChecks
         internal bool LegacyUnavailable;
         internal bool MainUnavailable;
         internal bool LinkedFile;
+        internal string? MoveMainOnNotes;
+        internal bool NotesUnavailable;
+        internal bool OversizeNotes;
+        internal CancellationTokenSource? CancelOnNotes;
         internal int OpenBodies;
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
@@ -246,8 +286,9 @@ internal static class SourceFeedChecks
             else if (request.RequestUri.AbsolutePath.Contains("/git/trees/", StringComparison.Ordinal))
             {
                 var commit = request.RequestUri.AbsolutePath.Split('/')[^1];
-                bytes = JsonSerializer.SerializeToUtf8Bytes(new { sha = commit, truncated = false,
-                    tree = Commits[commit].Select(f => new { path = f.Key, mode = LinkedFile && f.Key == "bg.lua" ? "120000" : "100644", type = "blob", size = f.Value.Length, sha = LazBisSourceRules.GitBlobHash(f.Value) }) });
+                var entries = Commits[commit].Select(f => new { path = f.Key, mode = LinkedFile && f.Key == "bg.lua" ? "120000" : "100644", type = "blob", size = f.Value.Length, sha = LazBisSourceRules.GitBlobHash(f.Value) }).ToList();
+                if (Notes.TryGetValue(commit, out var note)) entries.Add(new { path = "CHANGELOG", mode = "100644", type = "blob", size = OversizeNotes ? 65537 : note.Length, sha = LazBisSourceRules.GitBlobHash(note) });
+                bytes = JsonSerializer.SerializeToUtf8Bytes(new { sha = commit, truncated = false, tree = entries });
             }
             else if (request.RequestUri.Host == "raw.githubusercontent.com")
             {
@@ -255,7 +296,13 @@ internal static class SourceFeedChecks
                 if (path[3] == Unavailable) { bytes = []; status = HttpStatusCode.NotFound; }
                 else
                 {
-                    bytes = Commits[path[3]][path[4]];
+                    bytes = path[4] == "CHANGELOG" ? Notes[path[3]] : Commits[path[3]][path[4]];
+                    if (path[4] == "CHANGELOG")
+                    {
+                        if (CancelOnNotes is { } cancellation) { cancellation.Cancel(); token.ThrowIfCancellationRequested(); }
+                        if (NotesUnavailable) status = HttpStatusCode.NotFound;
+                        if (MoveMainOnNotes is { } next) Main = next;
+                    }
                     if (path[4] == CorruptPath) { bytes = bytes.ToArray(); bytes[0] ^= 1; }
                 }
             }

@@ -2,6 +2,7 @@ using System.IO.Compression;
 using LazBisPatcher.Core;
 
 if (args is ["--check-lazbis"]) { await SourceFeedChecks.LiveAsync(); return; }
+if (args is ["--prepare-lazbis-ui", var zipPath, var output]) { ManualInstallChecks.WriteUiFixtures(zipPath, output); return; }
 if (args.Length is < 1 or > 3) throw new ArgumentException("Usage: Smoke path-to-real-1.0.zip [compiled-patcher.exe] [--live], or Smoke --check-lazbis");
 var input = File.ReadAllBytes(args[0]);
 const string digest = "a975f2a5fcfe91fdb6c7cbe694563954950dcd0b6b7cee5400f2f2ee9d150e44";
@@ -16,6 +17,7 @@ Directory.CreateDirectory(fixture);
 try
 {
     await SourceFeedChecks.RunAsync(input, original, fixture);
+    await ManualInstallChecks.RunAsync(original, fixture);
     string root = Path.Combine(fixture, "MacroQuest");
     Directory.CreateDirectory(Path.Combine(root, "lua", "lazbis"));
     Directory.CreateDirectory(Path.Combine(root, "config"));
@@ -126,6 +128,7 @@ try
         var compiled = new Version(version.Major, version.Minor, version.Build);
         var offer = new Release(Product.Patcher, "v" + compiled, compiled, 3, 33, ReleaseRules.PatcherAsset,
             app.Length, Files.Hash(app), "");
+        await DownloadRecoveryChecks.RunAsync(fixture, app, offer);
         await updater.PrepareAsync(new MemoryFeed(app), offer, new Version(0, 0, 0), default);
         var control = Path.Combine(dir, ".lazbis-self-update");
         var pending = Files.ReadJson<PendingUpdate>(Path.Combine(control, "pending.json"));

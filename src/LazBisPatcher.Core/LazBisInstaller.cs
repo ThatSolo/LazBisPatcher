@@ -7,7 +7,12 @@ public sealed record InstallState(string Operation, Release Release, Dictionary<
 public sealed record InstallObservation(InstallState? Recorded, bool HasExistingFiles, Version? ReportedVersion,
     int MissingManagedFiles = 0);
 public sealed record FileChange(string Path, string? Before, string After, string Action);
-public sealed record InstallPreview(string Root, Release Release, InstallState? Installed, FileChange[] Changes);
+public sealed record InstallPreview(string Root, Release Release, InstallState? Installed, FileChange[] Changes)
+{
+    public bool Official10Upgrade => Installed is null && Release.Version > new Version(1, 0, 0) &&
+        Changes.All(c => c.Action != "Conflict") && Changes.Any(c => c.Action is "Add" or "Replace") &&
+        Changes.Any(c => LazBisPackage.IsReviewed10(c.Path, c.Before));
+}
 internal sealed record BackupFile(string Path, byte[]? Before, string After);
 internal sealed record Backup(string Operation, string Root, BackupFile[] Files);
 
@@ -110,7 +115,8 @@ public sealed class LazBisInstaller
             var before = File.Exists(path) ? Files.HashFile(path, 4194304) : null;
             var after = Files.Hash(entry.Value);
             var action = before == after ? "Keep" : before is null ? "Add" :
-                state?.Hashes.GetValueOrDefault(entry.Key) == before ? "Replace" : "Conflict";
+                (state is not null ? state.Hashes.GetValueOrDefault(entry.Key) == before
+                    : LazBisPackage.IsReviewed10(entry.Key, before)) ? "Replace" : "Conflict";
             return new FileChange(entry.Key, before, after, action);
         }).ToArray();
         return new(Root, release, state, changes);

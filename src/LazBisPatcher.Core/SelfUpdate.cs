@@ -1,16 +1,19 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace LazBisPatcher.Core;
 
 public sealed record PendingUpdate(string Id, string Nonce, string OldHash, Release Release, bool Committed = false);
 internal sealed record Health(string Id, string Nonce, string Version);
+internal sealed record DownloadingUpdate(string Owner, PendingUpdate Pending);
 
 public sealed class SelfUpdate
 {
     public const string AppName = "LazBisPatcher.exe";
     public const string HelperName = "LazBisPatcher.Helper.exe";
     private const string Marker = "LazBisPatcher preview self-update v1";
+    private const string DownloadOwner = "LazBisPatcher owned download v1";
     private readonly string folder;
     private readonly Func<string, string>? bundledHelper;
     private string Control => Path.Combine(folder, ".lazbis-self-update");
@@ -18,6 +21,8 @@ public sealed class SelfUpdate
     private string Candidate => Path.Combine(Control, "candidate.exe");
     private string Prior => Path.Combine(Control, "previous.exe");
     private string Ready => Path.Combine(Control, "ready.json");
+    private string Download => Path.Combine(Control, "download.json");
+    private string Restore => Path.Combine(Control, "restore.exe");
     private string Target => Path.Combine(folder, AppName);
     public bool HasPending => File.Exists(Journal);
 
@@ -33,6 +38,7 @@ public sealed class SelfUpdate
     {
         Initialize();
         using var updateLease = LockUpdater();
+        DiscardInterruptedDownload();
         return OpenAppLease();
     }
 
@@ -48,20 +54,27 @@ public sealed class SelfUpdate
             throw new InvalidDataException("Choose a newer patcher release.");
         Initialize();
         using var lease = LockUpdater();
-        if (HasPending || File.Exists(Candidate) || File.Exists(Prior) || File.Exists(Ready))
-            throw new InvalidDataException("An earlier patcher update needs review or recovery.");
+        DiscardInterruptedDownload();
+        if (Occupied(Journal) || Occupied(Prior) || Occupied(Ready) || Occupied(Restore))
+            throw new InvalidDataException($"An earlier patcher update has preparation or rollback evidence in {Control}. Keep all files and ask the maintainer to review recovery.");
+        if (Occupied(Candidate))
+            throw new InvalidDataException($"An unrecorded candidate.exe was preserved in {Control}. Close all patcher copies and back up that entire folder. If pending.json, previous.exe, ready.json or restore.exe exists, keep everything for maintainer review. Otherwise move only candidate.exe outside that folder, then reopen and retry.");
         var old = Files.HashFile(Target);
         var pending = new PendingUpdate(Guid.NewGuid().ToString("N"),
             Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)), old, release);
+        ReleaseRules.Validate(release);
+        // Publish ownership durably before creating candidate.exe. No swap has started.
+        Files.Write(Download, JsonSerializer.SerializeToUtf8Bytes(new DownloadingUpdate(DownloadOwner, pending), Files.Json), replace: false);
         try
         {
             await Files.StageAsync(feed, release, Candidate, token);
             VerifyExecutable(Candidate, release.Version);
             Files.WriteJson(Journal, pending);
+            File.Delete(Download);
         }
         catch
         {
-            if (!HasPending && File.Exists(Candidate)) File.Delete(Candidate);
+            if (!HasPending) DiscardInterruptedDownload();
             throw;
         }
     }
@@ -176,7 +189,7 @@ public sealed class SelfUpdate
         {
             if (!File.Exists(Prior) || Files.HashFile(Prior) != pending.OldHash)
                 throw new InvalidDataException("The previous patcher could not be verified. Keep its recovery files.");
-            var restore = Path.Combine(Control, "restore.exe");
+            var restore = Restore;
             if (!File.Exists(restore)) Files.Write(restore, Files.Read(Prior, (int)ReleaseRules.Limit(Product.Patcher)), replace: false);
             if (Files.HashFile(restore) != pending.OldHash) throw new InvalidDataException("Unexpected recovery executable.");
             if (current is null) File.Move(restore, Target);
@@ -190,7 +203,9 @@ public sealed class SelfUpdate
 
     private void Cleanup(PendingUpdate pending)
     {
-        foreach (var (path, hash) in new[] { (Prior, pending.OldHash), (Candidate, pending.Release.Sha256), (Path.Combine(Control, "restore.exe"), pending.OldHash) })
+        if (Occupied(Download) && ReadDownload().Pending != pending with { Committed = false })
+            throw new InvalidDataException("Download ownership differs from the prepared update. Keep all recovery files for review.");
+        foreach (var (path, hash) in new[] { (Prior, pending.OldHash), (Candidate, pending.Release.Sha256), (Restore, pending.OldHash) })
             if (File.Exists(path))
             {
                 if (Files.HashFile(path) != hash) throw new InvalidDataException("An unexpected executable was preserved.");
@@ -201,17 +216,52 @@ public sealed class SelfUpdate
             if (Files.ReadJson<Health>(Ready) != HealthOf(pending)) throw new InvalidDataException("Unexpected startup receipt.");
             File.Delete(Ready);
         }
+        if (File.Exists(Download)) File.Delete(Download);
         File.Delete(Journal);
+    }
+
+    private static bool Occupied(string path) => File.Exists(path) || Directory.Exists(path);
+
+    private DownloadingUpdate ReadDownload()
+    {
+        var record = Files.ReadJson<DownloadingUpdate>(Download);
+        if (record.Owner != DownloadOwner || record.Pending is null || record.Pending.Committed)
+            throw new InvalidDataException("Unknown patcher download ownership. Keep the files for maintainer review.");
+        ValidatePending(record.Pending);
+        return record;
+    }
+
+    private void DiscardInterruptedDownload()
+    {
+        if (!Occupied(Download) || Occupied(Journal)) return;
+        var record = ReadDownload();
+        if (Occupied(Prior) || Occupied(Ready) || Occupied(Restore) || !File.Exists(Target) || Files.HashFile(Target) != record.Pending.OldHash)
+            throw new InvalidDataException("The interrupted download has changed executable or rollback evidence. Keep all files for maintainer review.");
+        Files.Guard(Candidate);
+        if (Directory.Exists(Candidate)) throw new InvalidDataException("A folder occupies candidate.exe. Keep the download record for review.");
+        if (File.Exists(Candidate))
+        {
+            if (new FileInfo(Candidate).Length > record.Pending.Release.Bytes)
+                throw new InvalidDataException("The candidate exceeds its owned download size. It was preserved for review.");
+            File.Delete(Candidate);
+        }
+        File.Delete(Download);
     }
 
     private PendingUpdate ReadPending()
     {
         var pending = Files.ReadJson<PendingUpdate>(Journal);
+        ValidatePending(pending);
+        return pending;
+    }
+
+    private static void ValidatePending(PendingUpdate pending)
+    {
+        if (pending.Release is null) throw new InvalidDataException("Missing patcher update identity.");
         ReleaseRules.Validate(pending.Release);
         if (pending.Release.Product != Product.Patcher || !Guid.TryParseExact(pending.Id, "N", out _) ||
             !Files.IsHash(pending.Nonce) || !Files.IsHash(pending.OldHash))
             throw new InvalidDataException("Invalid patcher recovery record.");
-        return pending;
     }
 
     private static Health HealthOf(PendingUpdate p) => new(p.Id, p.Nonce, p.Release.Version.ToString());

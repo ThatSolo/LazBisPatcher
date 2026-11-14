@@ -79,15 +79,10 @@ public partial class MainWindow : Window
             }
             else if (installed is null)
             {
-                var available = new Version(release.Version.Major, release.Version.Minor, release.Version.Build, 0);
                 StatusLine.Text = observation switch
                 {
                     { HasExistingFiles: false } => "LazBis is ready to install.",
-                    { ReportedVersion: { } version } when version < available =>
-                        "An older LazBis copy was found. Review its files before updating.",
-                    { ReportedVersion: { } version } when version > available =>
-                        "This copy reports a newer version. Check it before continuing.",
-                    _ => "A LazBis copy was found. Review its files before continuing."
+                    _ => "Existing LazBis copy found. Review its files before continuing."
                 };
                 appRelease = release;
             }
@@ -157,6 +152,7 @@ public partial class MainWindow : Window
             var prepared = await Task.Run(() => installer.PrepareAsync(feed, release, deadline.Token));
             var plan = prepared.Preview;
             var action = ApplicationAction();
+            if (plan.Official10Upgrade) action = "Update LazBis";
             if (action == "Install LazBis" && plan.Changes.Any(c => c.Action != "Add")) action = "Review existing LazBis";
             var review = new InstallReviewWindow(plan, action) { Owner = this };
             if (review.ShowDialog() != true) return;

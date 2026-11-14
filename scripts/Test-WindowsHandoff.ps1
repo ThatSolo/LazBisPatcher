@@ -4,8 +4,9 @@ param(
     [string]$SourceVersion = '0.1.5',
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$')]
     [string]$TargetVersion = '0.1.6',
-    [ValidateSet('success','failed-launch','interrupted')]
-    [string[]]$Cases = @('success','failed-launch','interrupted')
+    [ValidateSet('success','failed-launch','interrupted','download-interrupted')]
+    [string[]]$Cases = @('success','failed-launch','interrupted','download-interrupted'),
+    [switch]$ExpectStagingBlock
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
@@ -112,7 +113,43 @@ foreach ($case in $Cases) {
     $started = $null
     $process = @()
     try {
-        if ($case -eq 'interrupted') {
+        if ($case -eq 'download-interrupted') {
+            $gate = Join-Path $feed 'pause-download'
+            New-Item -ItemType File $gate | Out-Null
+            $started = Start-Process -FilePath $app -ArgumentList '--fixture-update' -WindowStyle Hidden -PassThru
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            while (!(Test-Path (Join-Path $feed 'download-paused')) -and [DateTime]::UtcNow -lt $deadline) {
+                if ($started.HasExited) { throw 'Source exited before staging gate' }
+                Start-Sleep -Milliseconds 50
+            }
+            $candidate = Join-Path $control 'candidate.exe'
+            if (!(Test-Path $candidate) -or (Test-Path $pending)) { throw 'Expected a candidate before the pending journal' }
+            $partialBytes = (Get-Item $candidate).Length
+            if ($partialBytes -le 0 -or $partialBytes -ge $offer.bytes) { throw 'Candidate is not a partial download' }
+            $started.Kill()
+            if (!$started.WaitForExit(10000)) { throw 'Actual staging process did not terminate' }
+            $started.Dispose()
+            if ((Get-FileHash $app).Hash.ToLowerInvariant() -ne $oldHash -or (Test-Path $pending)) { throw 'Termination changed installed EXE or prepared an update' }
+            Remove-Item -LiteralPath $gate
+            $started = Start-Process -FilePath $app -PassThru
+            Invoke-UpdateButton $started
+            if ($ExpectStagingBlock) {
+                $deadline = [DateTime]::UtcNow.AddSeconds(10)
+                do {
+                    $started.Refresh()
+                    $window = [Windows.Automation.AutomationElement]::FromHandle($started.MainWindowHandle)
+                    $elements = $window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)
+                    $text = ($elements | ForEach-Object { $_.Current.Name }) -join "`n"
+                    if ($text -like '*earlier patcher update needs review*') { break }
+                    Start-Sleep -Milliseconds 100
+                } while ([DateTime]::UtcNow -lt $deadline)
+                if ($text -notlike '*earlier patcher update needs review*' -or (Get-Item $candidate).Length -ne $partialBytes -or
+                    (Get-FileHash $app).Hash.ToLowerInvariant() -ne $oldHash) { throw 'Expected legacy retry block was not reproduced' }
+                Write-Host "REPRO actual process termination after $partialBytes staged bytes, no pending journal; original EXE intact; reopen works; retry blocked"
+                continue
+            }
+            Write-Host "PASS actual process termination after $partialBytes staged bytes, no pending journal; reopened original EXE; retry started"
+        } elseif ($case -eq 'interrupted') {
             # Create the exact persisted state immediately after replacement, before startup.
             New-Item -ItemType Directory -Path $control | Out-Null
             [IO.File]::WriteAllText((Join-Path $control 'owner'), 'LazBisPatcher preview self-update v1')
@@ -135,7 +172,7 @@ foreach ($case in $Cases) {
             $started = Start-Process -FilePath $app -ArgumentList '--fixture-update' -WindowStyle Hidden -PassThru
         }
         if (!$started.WaitForExit(90000) -or $started.ExitCode -ne 0) { throw "$case original process failed" }
-        $expected = if ($case -eq 'success') { $newHash } else { $oldHash }
+        $expected = if ($case -in 'success','download-interrupted') { $newHash } else { $oldHash }
         $deadline = [DateTime]::UtcNow.AddSeconds(90)
         do {
             Start-Sleep -Milliseconds 200
@@ -155,6 +192,7 @@ foreach ($case in $Cases) {
         $after = @(Get-ChildItem -LiteralPath $mq -File -Recurse | Get-FileHash | ForEach-Object { $_.Path + ':' + $_.Hash })
         if (Compare-Object $before $after) { throw "$case changed player files" }
         if (Test-Path (Join-Path $control 'helper-stage.exe')) { throw 'Helper staging was not cleaned' }
+        if (Test-Path (Join-Path $control 'download.json')) { throw 'Download ownership record was not cleaned' }
         $cached = Join-Path $control 'LazBisPatcher.Helper.exe'
         if ([version]$SourceVersion -ge [version]'0.1.5' -or $case -eq 'interrupted') {
             $helperVersion = if ($case -eq 'interrupted') { $TargetVersion } else { $SourceVersion }

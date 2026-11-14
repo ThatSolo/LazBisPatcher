@@ -149,6 +149,8 @@ public static class LazBisPackage
 {
     private static readonly IReadOnlyDictionary<string, ManagedFile> Baseline = LoadBaseline();
     public static IReadOnlyCollection<string> Paths => Baseline.Keys.ToArray();
+    public static bool IsReviewed10(string path, string? hash) =>
+        hash is not null && Baseline.TryGetValue(path, out var file) && file.Sha256 == hash;
 
     private static IReadOnlyDictionary<string, ManagedFile> LoadBaseline()
     {

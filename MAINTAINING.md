@@ -19,6 +19,10 @@ For LazBis, the app resolves `main` once, reads `init.lua` at that exact commit 
 
 Only a newer version offers an update. A push with the same version does not replace a verified installation. Verify / repair uses the recorded commit and inventory, even if main moves. An older release-based installation keeps its original asset ID, length, SHA-256, version and ownership hashes for repair. A later version bump can upgrade it to a commit-based install. If the pinned source is unavailable, repair fails clearly rather than substituting current main. A failed main check does not prevent trying repair from the recorded source. New installs use the commit selected during their check.
 
+The matching version entry in the existing `CHANGELOG` is optional update text. The app reads at most 64 KiB, allows five seconds for that optional read, and verifies the bytes against the checked commit's Git blob identity. Missing, unverified or unmatched notes use generic text and do not block a valid update. `CHANGELOG` stays outside the 13 managed install paths. ThatSolo does not need to edit it to release a version.
+
+For an unrecorded copy, each managed file is assessed by bytes: keep a target match, add a missing file, and allow replacement of a reviewed official 1.0 SHA-256 match. Other differences are conflicts. The folder name and Lua-reported version do not grant file ownership. Recorded installations continue to use their saved hashes and pinned repair source. A verified install record is written only after successful apply.
+
 Patcher self-updates still use GitHub Releases. Keep the compiled production repository as `ThatSolo/LazBisPatcher`. HTTPS, Git object identities and asset hashes bind downloads to the selected GitHub response; they do not independently authenticate its publisher. Control of the two publisher repositories controls these feeds.
 
 ## Build and test
@@ -36,7 +40,7 @@ $sourceCommit = git rev-parse HEAD
 
 The build publishes the helper first, records its SHA-256 and bundles it inside the app. The release output is one `LazBisPatcher.exe`. Fixture builds use a local feed and test flags. Keep those builds off GitHub Releases.
 
-The portable launch check starts with only the EXE and checks the main screen, version, absence of notices UI and normal close. The fixture harness clicks Update Patcher and confirms the successful update, then checks relaunch, failed-startup rollback, interrupted-swap recovery, helper extraction and repair, and unchanged disposable LazBis, config and database files. These local feed tests do not establish live GitHub update readiness.
+The portable launch check starts with only the EXE and checks the main screen, version, absence of notices UI and normal close. The fixture harness clicks Update Patcher and confirms the successful update, then checks relaunch, failed-startup rollback, constructed interrupted-swap recovery, and an actual process termination during a gated partial download followed by reopen and retry. It also checks helper extraction/repair and unchanged disposable LazBis, config and database files. These local feed tests do not establish live GitHub update readiness.
 
 The smoke suite needs the reviewed LazBis 1.0 ZIP. If it is not already available locally:
 
@@ -48,9 +52,10 @@ Run the smoke suite against the release EXE:
 
 ```powershell
 dotnet run --project tests/LazBisPatcher.Smoke -c Release -- out\lazbis-1.0\lazbis.zip out\release-0.1.5\LazBisPatcher.exe
+.\scripts\Test-LazBisUi.ps1
 ```
 
-The installer checks use the real pinned 1.0 ZIP for legacy compatibility and a generated LazBis 1.0.1 update. Source-feed checks cover a version bump, a push without a bump, main moving between check and download, pinned repair, legacy records, unavailable sources, bad blob identities, conflicts, rollback and player-file preservation. Executable checks inspect the candidate bytes and recovery records. Add `--live` as the final argument only when deliberately checking the real LazBis feed and installing into a disposable folder. Report network failures separately from local test results.
+The installer checks use the real pinned 1.0 ZIP for legacy compatibility and a generated LazBis 1.0.1 update. Source-feed and installer checks cover optional changelog fallbacks, direct manual 1.0 upgrades, missing files, local edits, cancellation, unknown forks, manual fixture moves and a clean install, plus a version bump, a push without a bump, main moving between check and download, pinned repair, legacy records, unavailable sources, bad blob identities, conflicts, rollback and player-file preservation. Executable checks inspect the candidate bytes and recovery records. Add `--live` as the final argument only when deliberately checking the real LazBis feed and installing into a disposable folder. Report network failures separately from local test results.
 
 If Windows blocks the unsigned build script, use `pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Preview.ps1 -Version 0.1.5`. For the build command with two version values, use `pwsh -NoProfile -ExecutionPolicy Bypass -Command "& .\scripts\Build-Preview.ps1 -Fixture -Version '0.1.5','0.1.6'"`. This affects that PowerShell process only.
 
@@ -95,11 +100,17 @@ For maintainer verification, this validator resolves the live main commit, check
 .\scripts\Test-Release.ps1 -Product LazBis
 ```
 
-The smoke suite also tests a generated 1.0 to 1.0.1 update and older installation records. Stop LazBis and its background helper before applying any real installation changes. Keep patcher EXE releases in the separate section above.
+The smoke suite also tests a generated 1.0 to 1.0.1 update and older installation records. MacroQuest can stay open. Before applying changes or moving the old script folder, run `/lua stop lazbis` on every character using it. If that copy runs the helper, also run `/lua stop lazbis/bg` on those characters. Keep patcher EXE releases in the separate section above.
 
 ## Recovery and safety limits
 
 Normal launch needs only the app EXE. Update or recovery extracts the verified bundled helper into `.lazbis-self-update`. Existing helper bytes are checked before use and replaced from the bundle when needed. Reopen the app after an interruption.
+
+Patcher downloads write `download.json` under the updater lock before creating `candidate.exe`. After an interrupted download, startup or retry can discard only that owned candidate when the installed EXE still matches the record and no prepared journal, prior EXE, startup receipt or restore file exists. A written `pending.json` keeps the prepared update on the existing recovery path.
+
+An older journal-less candidate without that ownership record is preserved. Close all patcher copies and back up the entire `.lazbis-self-update` folder. If `pending.json`, `previous.exe`, `ready.json` or `restore.exe` exists, keep all files for maintainer review. Otherwise move only the unrecorded `candidate.exe` outside the control folder, then reopen and retry. Do not remove individual journals or ownership records to bypass a recovery warning.
+
+For an unverified fork switch, follow the [player instructions](README.md#switch-from-another-lazbis-copy). Back up the entire old script folder and its data before manually moving `lua\lazbis` outside `lua`. The patcher does not move, merge or migrate it. Moving scripts does not isolate `resources\lazbis.db` or `config\lazbis_lockouts.lua`; unknown compatibility calls for a separate MacroQuest test copy with its own data.
 
 If the app cannot start and the cached helper exists, close all patcher copies and run this from the app folder:
 
@@ -109,6 +120,6 @@ If the app cannot start and the cached helper exists, close all patcher copies a
 
 The last argument supplies the app folder. Keep recovery files when the helper requests review. Avoid deleting pending state or sweeping shared .NET extraction caches.
 
-Use one cooperating writer on a local writable drive without directory links. Stop LazBis and its background helper on every character before applying changes; the patcher does not detect running scripts. LazBis writes are limited to the reviewed inventory beneath `lua/lazbis`. Its state, rollback data and latest committed backup are under `lua/.lazbis-patcher`. Legacy modules are not removed. Power-loss and hostile same-user filesystem safety are not claimed. The EXE is unsigned.
+Use one cooperating writer on a local writable drive without directory links. MacroQuest can stay open. Run `/lua stop lazbis` on every character using it before applying changes or moving the old folder. If that copy runs the helper, also run `/lua stop lazbis/bg`. The patcher does not detect running scripts. LazBis writes are limited to the reviewed inventory beneath `lua/lazbis`. Its state, rollback data and latest committed backup are under `lua/.lazbis-patcher`. Legacy modules are not removed. Power-loss and hostile same-user filesystem safety are not claimed. The EXE is unsigned.
 
 The [runtime notice review](docs/RUNTIME_NOTICES.md) describes the included texts and open redistribution questions. [Verification](VERIFICATION.md) keeps the unresolved legacy timeout and pending live feed check visible.

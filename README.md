@@ -15,13 +15,29 @@ No ZIP extraction or separate helper download is needed. The EXE is not digitall
 The patcher checks for updates when it opens. You can also click **Check for Updates** at any time.
 
 - **Install LazBis** sets up a new copy.
-- **Update LazBis** installs a newer LazBis release.
-- **Review existing LazBis** checks a copy the patcher hasn’t verified yet. If any files differ and need review, the patcher lists them and leaves them in place.
+- **Update LazBis** installs a newer LazBis version.
+- **Review existing LazBis** checks an unrecorded copy. Recognized official 1.0 files can upgrade directly. Other managed-file differences block installation and stay in place.
 - **Verify / repair LazBis** checks your installed copy and can restore missing files.
 
-Before applying changes, close MacroQuest or stop LazBis and its background helper on every character. Review the summary, then confirm. You can expand **File details** to see what will change.
+MacroQuest can stay open. Before applying an update or moving an old script folder:
+
+- Run `/lua stop lazbis` on every character running it.
+- If that copy runs the background helper, also run `/lua stop lazbis/bg` on those characters.
+
+Review the summary, then confirm. Expand **File details** to see what will change.
 
 Once LazBis is installed, start it in MacroQuest with `/lua run lazbis`.
+
+## Switch from another LazBis copy
+
+If **Existing LazBis copy found** blocks installation, the patcher leaves that copy and its extra files in place.
+
+1. Stop the scripts using the commands above.
+2. Back up the entire old script folder and its data.
+3. Move `lua\lazbis` outside `lua`.
+4. Click **Check for Updates**, then install ThatSolo's LazBis.
+
+The patcher does not move folders, merge fork files or migrate data. Moving the script folder alone does not isolate shared files such as `resources\lazbis.db` or `config\lazbis_lockouts.lua`. If database or settings compatibility is unknown, use a separate MacroQuest test copy with its own data.
 
 ## Update the patcher
 

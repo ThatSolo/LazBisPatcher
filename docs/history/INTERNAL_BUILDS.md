@@ -4,6 +4,7 @@ These results describe earlier builds. Their asset names, packaging and test com
 
 | Build or version pair | Useful recorded result | Evidence status |
 | --- | --- | --- |
+| Commit-pinned 0.1.5 from `b83b5b4a3794dcd2b4a9ac64b56f80268b0cc8f3` | Exact EXE launch, source/legacy checks, live main disposable install and three native self-update cases passed | EXE SHA-256 `786d354d4fe0bc4e61b586887e0bde6b1ce344f323087bc585117118dcea8108`; superseded by owned download retry and manual-install recognition |
 | Release-feed 0.1.5 from `dbe5c34935035a09f700df45fa057c28c5e1bb03` | Exact EXE main-screen launch, three native update/recovery fixtures and five smoke groups passed | EXE SHA-256 `c75a6e8ca7281ef49e773a47208f9ba35bc7df452450a9cc2b6c4baa948f5dac`; superseded by commit-pinned LazBis discovery; no live patcher feed claim |
 | Two-file fixtures 0.1.3 to 0.1.4 | Update/relaunch, failed-startup rollback and interrupted-swap recovery passed, 3/3 | Earlier package layout; superseded by current portable fixtures |
 | Two-file fixture 0.1.4 to earlier portable fixture 0.1.5 | All three update/recovery cases passed in the final recorded run | Earlier update asset name; not proof of the current feed |

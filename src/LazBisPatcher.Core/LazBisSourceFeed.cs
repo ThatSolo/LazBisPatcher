@@ -144,6 +144,7 @@ public static class LazBisSourceRules
 internal sealed class LazBisSourceFeed(GitHubFeed github)
 {
     private const string Repository = "https://api.github.com/repos/ThatSolo/lazbis";
+    internal const string GenericNotes = "MacroQuest can stay open. Before applying changes, run /lua stop lazbis on every character using it. If this copy runs the background helper, also run /lua stop lazbis/bg on those characters.";
 
     public async Task<Release> CheckAsync(CancellationToken token)
     {
@@ -188,8 +189,33 @@ internal sealed class LazBisSourceFeed(GitHubFeed github)
         var init = await ReadFileAsync(source.Commit, files.Single(f => f.Path == "init.lua"), token);
         var version = LazBisSourceRules.ReadVersion(init);
         selected = selected with { Tag = version, Version = LazBisSourceRules.VersionOf(version),
-            Notes = "Review the file changes before installing. Stop LazBis and its background helper on every character first." };
+            Notes = await ReadNotesAsync(source.Commit, entries, version, token) };
         return selected;
+    }
+
+    private async Task<string> ReadNotesAsync(string commit, JsonElement[] entries, string version, CancellationToken token)
+    {
+        var matches = entries.Where(e => e.GetProperty("path").GetString() == "CHANGELOG").ToArray();
+        if (matches.Length != 1) return GenericNotes;
+        try
+        {
+            var entry = matches[0];
+            if (entry.GetProperty("type").GetString() != "blob" || entry.GetProperty("mode").GetString() is not ("100644" or "100755"))
+                return GenericNotes;
+            var file = new SourceFile("CHANGELOG", entry.GetProperty("size").GetInt64(), entry.GetProperty("sha").GetString() ?? "");
+            if (file.Bytes is < 1 or > 65536 || !LazBisSourceRules.IsGitSha(file.GitBlob)) return GenericNotes;
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+            budget.CancelAfter(TimeSpan.FromSeconds(5));
+            var bytes = await ReadFileAsync(commit, file, budget.Token);
+            return LazBisChangelog.Entry(bytes, version) ?? GenericNotes;
+        }
+        // The version and managed files are already selected; optional notes cannot hide them.
+        catch (OperationCanceledException) { return GenericNotes; }
+        catch (Exception e) when (e is IOException or InvalidDataException or HttpRequestException or
+            JsonException or KeyNotFoundException or InvalidOperationException or FormatException or DecoderFallbackException)
+        {
+            return GenericNotes;
+        }
     }
 
     public async Task DownloadAsync(Release release, Stream destination, CancellationToken token)
@@ -218,5 +244,24 @@ internal sealed class LazBisSourceFeed(GitHubFeed github)
         {
             throw new HttpRequestException($"LazBis source {file.Path} at commit {commit} is unavailable. Repair cannot switch to another commit. {e.Message}", e);
         }
+    }
+}
+
+internal static class LazBisChangelog
+{
+    internal static string? Entry(byte[] bytes, string version)
+    {
+        var text = new UTF8Encoding(false, true).GetString(bytes).TrimStart('\uFEFF');
+        var headers = Regex.Matches(text,
+            @"(?m)^[ \t]*(?:\#{1,6}[ \t]+)?\[?v?(?<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)\]?(?:[ \t]+[^\r\n]*)?[ \t]*\r?$");
+        var matches = headers.Select((header, index) => (header, index))
+            .Where(pair => pair.header.Groups["version"].Value == version).ToArray();
+        if (matches.Length != 1) return null;
+        var (match, position) = matches[0];
+        var end = position + 1 < headers.Count ? headers[position + 1].Index : text.Length;
+        var body = text[(match.Index + match.Length)..end].Trim();
+        if (body.Length == 0) return null;
+        var note = text[match.Index..end].Trim();
+        return note[..Math.Min(note.Length, 16000)];
     }
 }

@@ -12,8 +12,10 @@ public partial class InstallReviewWindow : Window
         var replaced = plan.Changes.Count(file => file.Action == "Replace");
         var conflicts = plan.Changes.Where(file => file.Action == "Conflict").ToArray();
         var canApply = conflicts.Length == 0;
+        var unverifiedConflict = !canApply && plan.Installed is null;
+        const string stop = "MacroQuest can stay open. Run /lua stop lazbis on every character using it. If this copy runs the background helper, also run /lua stop lazbis/bg on those characters.";
 
-        Title = Heading.Text = canApply ? action : "Review your existing LazBis files";
+        Title = Heading.Text = canApply ? action : unverifiedConflict ? "Existing LazBis copy found" : "Review your existing LazBis files";
         Folder.Text = plan.Root;
         ConfirmButton.Content = action == "Review existing LazBis" ? "Verify LazBis" : action;
 
@@ -26,16 +28,17 @@ public partial class InstallReviewWindow : Window
                 (_, 0) => $"LazBis {plan.Release.Tag} will add {FileCount(added)}.",
                 _ => $"LazBis {plan.Release.Tag} will add {FileCount(added)} and replace {FileCount(replaced)}."
             };
-            Guidance.Text = added + replaced == 0 ? "No LazBis files need to change."
-                : action == "Install LazBis" ? "If MacroQuest is open, close it before installing."
-                : "Close MacroQuest, or stop LazBis and its background helper on every character before continuing.";
+            if (plan.Official10Upgrade) Summary.Text = "Official 1.0 files recognized. " + Summary.Text;
+            Guidance.Text = added + replaced == 0 ? "No LazBis files need to change." : stop;
         }
         else
         {
             Summary.Text = conflicts.Length == 1
                 ? "One file needs review. Your files are unchanged."
                 : $"{conflicts.Length} files need review. Your files are unchanged.";
-            Guidance.Text = "Keep a backup and review the listed files before trying again.";
+            Guidance.Text = unverifiedConflict
+                ? stop + "\n\nTo switch to ThatSolo's version, back up the entire old script folder and its data, then move lua\\lazbis outside lua. Click Check for Updates and install again.\n\nMoving the script folder does not isolate resources\\lazbis.db or config\\lazbis_lockouts.lua. If compatibility is unknown, use a separate MacroQuest test copy with its own data."
+                : stop + "\n\nBack up and review the listed local changes before trying again.";
             ConfirmButton.Visibility = Visibility.Collapsed;
             DismissButton.Content = "Close";
             Details.IsExpanded = true;
