@@ -121,7 +121,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <TextBlock Text="Release notes" Foreground="{StaticResource Gold}" FontWeight="Bold" Margin="0,0,0,6" />
+                <TextBlock Text="Update details" Foreground="{StaticResource Gold}" FontWeight="Bold" Margin="0,0,0,6" />
                 <Border Grid.Row="1" BorderBrush="{StaticResource Border}" BorderThickness="1" Background="{StaticResource Panel}">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <TextBlock x:Name="PatchNotesText" Text="Check GitHub for update details." Foreground="{StaticResource Text}" FontFamily="Consolas" TextWrapping="Wrap" Padding="10" />

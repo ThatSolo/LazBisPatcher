@@ -8,7 +8,7 @@ namespace LazBisPatcher.Core;
 
 public enum Product { LazBis, Patcher }
 public sealed record Release(Product Product, string Tag, Version Version, long ReleaseId, long AssetId,
-    string Name, long Bytes, string Sha256, string Notes);
+    string Name, long Bytes, string Sha256, string Notes, LazBisSource? Source = null);
 public interface IReleaseFeed
 {
     Task<Release> CheckAsync(Product product, CancellationToken token);
@@ -34,6 +34,7 @@ public static class ReleaseRules
 
     public static void Validate(Release release)
     {
+        if (release.Source is not null) { LazBisSourceRules.Validate(release); return; }
         if (release.Version != VersionOf(release.Tag, release.Product) || release.ReleaseId <= 0 ||
             release.AssetId <= 0 || release.Name != NameOf(release.Product) || release.Bytes <= 0 ||
             release.Bytes > Limit(release.Product) || !Files.IsHash(release.Sha256))
@@ -48,17 +49,21 @@ public sealed class GitHubFeed : IReleaseFeed
         Timeout = TimeSpan.FromSeconds(30)
     };
     private readonly string patcherRepository;
-    public GitHubFeed(string patcherRepository)
+    private readonly HttpClient client;
+    public GitHubFeed(string patcherRepository) : this(patcherRepository, Client) { }
+    internal GitHubFeed(string patcherRepository, HttpClient client)
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(patcherRepository, @"\A[A-Za-z0-9_-]{1,39}/[A-Za-z0-9_.-]{1,100}\z") ||
             patcherRepository.Split('/')[1] is "." or "..")
             throw new InvalidDataException("The patcher publisher must be a GitHub owner/repository.");
         this.patcherRepository = patcherRepository;
+        this.client = client;
     }
     private string Repository(Product product) => product == Product.LazBis ? "ThatSolo/lazbis" : patcherRepository;
 
     public async Task<Release> CheckAsync(Product product, CancellationToken token)
     {
+        if (product == Product.LazBis) return await new LazBisSourceFeed(this).CheckAsync(token);
         var repository = Repository(product);
         using var response = await SendAsync(new($"https://api.github.com/repos/{repository}/releases/latest"), false, token);
         var json = await ReadAsync(response, 1 << 20, token);
@@ -86,6 +91,11 @@ public sealed class GitHubFeed : IReleaseFeed
     public async Task DownloadAsync(Release release, Stream destination, CancellationToken token)
     {
         ReleaseRules.Validate(release);
+        if (release.Source is not null)
+        {
+            await new LazBisSourceFeed(this).DownloadAsync(release, destination, token);
+            return;
+        }
         var repository = Repository(release.Product);
         var url = new Uri($"https://api.github.com/repos/{repository}/releases/assets/{release.AssetId}");
         for (int redirect = 0; redirect < 3; redirect++)
@@ -106,13 +116,13 @@ public sealed class GitHubFeed : IReleaseFeed
         throw new InvalidDataException("GitHub asset redirected too many times.");
     }
 
-    private static async Task<HttpResponseMessage> SendAsync(Uri url, bool asset, CancellationToken token)
+    internal async Task<HttpResponseMessage> SendAsync(Uri url, bool asset, CancellationToken token)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd("LazBisPatcher");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(asset ? "application/octet-stream" : "application/vnd.github+json"));
         if (url.Host == "api.github.com") request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
-        var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
         if (response.IsSuccessStatusCode || asset && (int)response.StatusCode is >= 300 and < 400) return response;
         var status = response.StatusCode;
         response.Dispose();
@@ -124,7 +134,7 @@ public sealed class GitHubFeed : IReleaseFeed
         });
     }
 
-    private static async Task<byte[]> ReadAsync(HttpResponseMessage response, long maximum, CancellationToken token)
+    internal static async Task<byte[]> ReadAsync(HttpResponseMessage response, long maximum, CancellationToken token)
     {
         await using var input = await response.Content.ReadAsStreamAsync(token);
         using var output = new MemoryStream();
@@ -174,11 +184,18 @@ public static class LazBisPackage
             var bytes = new byte[checked((int)entry.Length)];
             input.ReadExactly(bytes);
             if (input.ReadByte() != -1) throw new InvalidDataException("LazBis ZIP entry exceeds its declared size.");
-            if (release.Tag == "1.0" && (bytes.Length != expected.Bytes || Files.Hash(bytes) != expected.Sha256))
+            if (release.Source is { } source)
+            {
+                var file = source.Files.Single(f => f.Path == expected.Path);
+                LazBisSourceRules.VerifyFile(file, bytes);
+            }
+            else if (release.Tag == "1.0" && (bytes.Length != expected.Bytes || Files.Hash(bytes) != expected.Sha256))
                 throw new InvalidDataException("LazBis 1.0 differs from the reviewed release. Publish changes with a new tag.");
             result.Add(expected.Path, bytes);
         }
         if (result.Count != Baseline.Count) throw new InvalidDataException("LazBis ZIP is missing files from the reviewed inventory.");
+        if (release.Source is not null && LazBisSourceRules.ReadVersion(result["init.lua"]) != release.Tag)
+            throw new InvalidDataException("The selected commit's meta.version differs from the checked version. Check again.");
         return result;
     }
 }
@@ -265,9 +282,18 @@ public static class Files
         await using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
             await feed.DownloadAsync(release, output, budget.Token);
-            if (output.Length != release.Bytes) throw new InvalidDataException("Download length does not match the selected release.");
+            if (release.Source is null && output.Length != release.Bytes)
+                throw new InvalidDataException("Download length does not match the selected release.");
+            if (release.Source is not null && output.Length > ReleaseRules.Limit(Product.LazBis) + (1 << 20))
+                throw new InvalidDataException("LazBis source package exceeds the size limit.");
             output.Flush(true);
         }
-        if (HashFile(path) != release.Sha256) throw new InvalidDataException("Download SHA-256 does not match the selected release.");
+        if (release.Source is null && HashFile(path) != release.Sha256)
+            throw new InvalidDataException("Download SHA-256 does not match the selected release.");
+        if (release.Source is not null)
+        {
+            using var archive = File.OpenRead(path);
+            LazBisPackage.Read(archive, release);
+        }
     }
 }

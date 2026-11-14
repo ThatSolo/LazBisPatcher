@@ -91,25 +91,29 @@ public partial class MainWindow : Window
                 };
                 appRelease = release;
             }
-            else if (release.Version > installed.Release.Version || LazBisInstaller.SameAsset(release, installed.Release))
+            else
             {
                 var newer = release.Version > installed.Release.Version;
                 StatusLine.Text = observation switch
                 {
-                    { HasExistingFiles: false } => "LazBis files are missing. Install the available release.",
+                    { HasExistingFiles: false } => newer ? "LazBis files are missing. Install the available update."
+                        : "LazBis files are missing. Restore your last verified source.",
                     { MissingManagedFiles: > 0 } => newer
                         ? "Some LazBis files are missing. Review the available update."
                         : "Some LazBis files are missing. Use Verify / repair to restore them.",
                     _ => newer ? "A LazBis update is available."
-                        : "LazBis version is current. Use Verify / repair to check its files."
+                        : release.Version < installed.Release.Version
+                            ? "Main reports an older version. Verify / repair uses your last verified source."
+                            : "LazBis version is current. Verify / repair uses your last verified source."
                 };
-                appRelease = release;
+                appRelease = LazBisInstaller.SelectForInstall(release, installed);
             }
-            else StatusLine.Text = "The release is older than the last verified version, or its asset changed. Ask ThatSolo to check the release.";
         }
         catch (Exception e)
         {
-            StatusLine.Text = "LazBis check unavailable.";
+            appRelease = observation?.Recorded?.Release;
+            StatusLine.Text = appRelease is null ? "LazBis check unavailable. See the message below."
+                : "LazBis check unavailable. Verify / repair uses your last verified source.";
             if (VersionLine.Text.EndsWith("checking", StringComparison.Ordinal))
                 VersionLine.Text = "Installed: unverified  |  Available: unavailable";
             Log(Message(e));
@@ -170,8 +174,6 @@ public partial class MainWindow : Window
             "Update LazBisPatcher", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         await RunAsync(async () =>
         {
-            if (!File.Exists(Path.Combine(AppContext.BaseDirectory, SelfUpdate.HelperName)))
-                throw new InvalidDataException("Extract the complete patcher ZIP, including its update helper.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             await Task.Run(() => updater.PrepareAsync(feed, release, App.CurrentVersion, deadline.Token));
             updater.StartHelper(recover: false);
@@ -265,7 +267,7 @@ public partial class MainWindow : Window
     }
     private void GitHubLink_RequestNavigate(object sender, RequestNavigateEventArgs e)
     {
-        Process.Start(new ProcessStartInfo("https://github.com/ThatSolo/lazbis/releases") { UseShellExecute = true })?.Dispose();
+        Process.Start(new ProcessStartInfo("https://github.com/ThatSolo/lazbis") { UseShellExecute = true })?.Dispose();
         e.Handled = true;
     }
 }

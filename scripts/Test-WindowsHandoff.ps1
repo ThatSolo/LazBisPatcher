@@ -8,6 +8,30 @@ param(
     [string[]]$Cases = @('success','failed-launch','interrupted')
 )
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class LazBisHandoffDialog {
+    [DllImport("user32.dll")] static extern IntPtr GetLastActivePopup(IntPtr owner);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
+    [DllImport("user32.dll")] static extern IntPtr GetDlgItem(IntPtr dialog, int id);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+    public static bool Confirm(IntPtr owner, int process) {
+        var dialog=GetLastActivePopup(owner);
+        if(dialog==IntPtr.Zero || dialog==owner || !IsWindowEnabled(dialog)) return false;
+        GetWindowThreadProcessId(dialog, out var actual);
+        var title=new StringBuilder(256);
+        GetWindowText(dialog,title,title.Capacity);
+        if(actual!=process || title.ToString()!="Update LazBisPatcher") return false;
+        var yes=GetDlgItem(dialog,6);
+        return yes!=IntPtr.Zero && IsWindowEnabled(yes) && PostMessage(dialog,0x0111,new IntPtr(6),yes);
+    }
+}
+'@
 $Output = [IO.Path]::GetFullPath($Output)
 $old = Join-Path $Output "fixture-$SourceVersion"
 $new = Join-Path $Output "fixture-$TargetVersion/LazBisPatcher.exe"
@@ -28,6 +52,34 @@ function Get-OwnedProcesses([string]$Folder) {
         (Join-Path $Folder '.lazbis-self-update/LazBisPatcher.Helper.exe'))
     Get-Process LazBisPatcher,LazBisPatcher.Helper -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -in $paths }
+}
+
+function Invoke-UpdateButton([Diagnostics.Process]$Process) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(45)
+    $button = $null
+    do {
+        $Process.Refresh()
+        if ($Process.HasExited) { throw 'Source app exited before Update Patcher was clicked' }
+        if ($Process.MainWindowHandle -ne 0) {
+            $window = [Windows.Automation.AutomationElement]::FromHandle($Process.MainWindowHandle)
+            $button = $window.FindFirst([Windows.Automation.TreeScope]::Descendants,
+                [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, 'Update Patcher'))
+            if ($button -and $button.Current.IsEnabled -and !$button.Current.IsOffscreen) { break }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (!$button -or !$button.Current.IsEnabled -or $button.Current.IsOffscreen) { throw 'Update Patcher button did not become available' }
+    $owner = $Process.MainWindowHandle
+    ([Windows.Automation.InvokePattern]$button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    # The classic confirmation dialog may lack UIA Invoke support on this Windows host.
+    # Send IDYES only to this test process's owned, enabled update-confirmation dialog.
+    $confirmed = $false
+    do {
+        $confirmed = [LazBisHandoffDialog]::Confirm($owner, $Process.Id)
+        if ($confirmed) { break }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (!$confirmed) { throw 'Patcher update confirmation did not appear' }
 }
 
 foreach ($case in $Cases) {
@@ -75,6 +127,10 @@ foreach ($case in $Cases) {
                 [IO.File]::WriteAllText((Join-Path $control 'helper-stage.exe'), 'interrupted extraction')
             }
             $started = Start-Process -FilePath $app -WindowStyle Hidden -PassThru
+        } elseif ($case -eq 'success') {
+            # Exercise the actual button and confirmation with only the bundled helper.
+            $started = Start-Process -FilePath $app -PassThru
+            Invoke-UpdateButton $started
         } else {
             $started = Start-Process -FilePath $app -ArgumentList '--fixture-update' -WindowStyle Hidden -PassThru
         }
@@ -105,7 +161,8 @@ foreach ($case in $Cases) {
             $expectedHelper = Join-Path $Output "bundled-helper-fixture-$helperVersion/LazBisPatcher.Helper.exe"
             if ((Get-FileHash $cached).Hash -ne (Get-FileHash $expectedHelper).Hash) { throw 'Extracted helper differs from bundled build' }
         }
-        Write-Host "PASS $case (fixture $SourceVersion -> fixture $TargetVersion), only LazBisPatcher.exe offered, player files unchanged"
+        $entry = if ($case -eq 'success') { ', clicked Update Patcher and confirmed' } else { '' }
+        Write-Host "PASS $case (fixture $SourceVersion -> fixture $TargetVersion), only LazBisPatcher.exe offered$entry, player files unchanged"
     } finally {
         # Only test-owned processes with exact executable paths.
         if (!$dir.StartsWith($fixtureRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Fixture root changed' }

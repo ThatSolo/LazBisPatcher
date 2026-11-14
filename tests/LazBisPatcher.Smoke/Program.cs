@@ -1,7 +1,8 @@
 using System.IO.Compression;
 using LazBisPatcher.Core;
 
-if (args.Length is < 1 or > 3) throw new ArgumentException("Usage: Smoke path-to-real-1.0.zip [compiled-patcher.exe] [--live]");
+if (args is ["--check-lazbis"]) { await SourceFeedChecks.LiveAsync(); return; }
+if (args.Length is < 1 or > 3) throw new ArgumentException("Usage: Smoke path-to-real-1.0.zip [compiled-patcher.exe] [--live], or Smoke --check-lazbis");
 var input = File.ReadAllBytes(args[0]);
 const string digest = "a975f2a5fcfe91fdb6c7cbe694563954950dcd0b6b7cee5400f2f2ee9d150e44";
 Require(Files.Hash(input) == digest, "real release pin");
@@ -14,6 +15,7 @@ var fixture = Path.Combine(Path.GetTempPath(), "LazBisSmoke-" + Guid.NewGuid().T
 Directory.CreateDirectory(fixture);
 try
 {
+    await SourceFeedChecks.RunAsync(input, original, fixture);
     string root = Path.Combine(fixture, "MacroQuest");
     Directory.CreateDirectory(Path.Combine(root, "lua", "lazbis"));
     Directory.CreateDirectory(Path.Combine(root, "config"));
@@ -107,17 +109,7 @@ try
 
     if (args.Length == 3 && args[2] == "--live")
     {
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-        var feed = new GitHubFeed("ThatSolo/LazBisPatcher");
-        var actual = await feed.CheckAsync(Product.LazBis, deadline.Token);
-        Require(LazBisInstaller.SameAsset(actual, release1), "current GitHub 1.0 offer identity");
-        var liveRoot = Path.Combine(fixture, "LiveReleaseDisposable");
-        Directory.CreateDirectory(Path.Combine(liveRoot, "lua"));
-        Directory.CreateDirectory(Path.Combine(liveRoot, "config"));
-        var live = new LazBisInstaller(liveRoot);
-        (await live.PrepareAsync(feed, actual, deadline.Token)).Apply();
-        Require(live.Inspect()?.Release.AssetId == release1.AssetId, "real feed asset installed");
-        Console.WriteLine("PASS live GitHub stable check, exact asset-ID download and disposable install");
+        await SourceFeedChecks.LiveAsync();
     }
 
     if (args.Length >= 2)

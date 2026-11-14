@@ -8,14 +8,18 @@ We originally built AdventureTimePatcher under drel-git, then transferred its Gi
 
 Preserve the attribution and terms for any specific third-party code or assets carried forward. The runtime licenses cover the bundled runtime components; they do not choose a license for the patcher source.
 
-## Trusted release feeds
+## Trusted update feeds
 
-| Product | GitHub repository | Stable release asset |
+| Product | GitHub repository | Update source |
 | --- | --- | --- |
-| LazBis | ThatSolo/lazbis | `lazbis.zip` |
-| LazBisPatcher | ThatSolo/LazBisPatcher | `LazBisPatcher.exe` |
+| LazBis | ThatSolo/lazbis | `main` commit, with a literal `meta.version` in `init.lua` |
+| LazBisPatcher | ThatSolo/LazBisPatcher | Latest stable GitHub Release with `LazBisPatcher.exe` |
 
-The app checks each repository's latest stable release over HTTPS. The patcher repository is compiled into the app; keep its production value as `ThatSolo/LazBisPatcher`. Access to those publisher accounts controls the trusted release feeds. Asset IDs, lengths and SHA-256 values bind downloads to the selected response. They do not independently authenticate the publisher.
+For LazBis, the app resolves `main` once, reads `init.lua` at that exact commit as text, and compares its version with the last verified installed version. It supports `1.0` and three-part versions such as `1.0.1`. It pins the selected commit and reviewed file paths through download and verification. Each file's length and Git blob identity must match that commit's tree before the installer reviews or writes it. Installed records retain SHA-256 values for file ownership.
+
+Only a newer version offers an update. A push with the same version does not replace a verified installation. Verify / repair uses the recorded commit and inventory, even if main moves. An older release-based installation keeps its original asset ID, length, SHA-256, version and ownership hashes for repair. A later version bump can upgrade it to a commit-based install. If the pinned source is unavailable, repair fails clearly rather than substituting current main. A failed main check does not prevent trying repair from the recorded source. New installs use the commit selected during their check.
+
+Patcher self-updates still use GitHub Releases. Keep the compiled production repository as `ThatSolo/LazBisPatcher`. HTTPS, Git object identities and asset hashes bind downloads to the selected GitHub response; they do not independently authenticate its publisher. Control of the two publisher repositories controls these feeds.
 
 ## Build and test
 
@@ -32,7 +36,7 @@ $sourceCommit = git rev-parse HEAD
 
 The build publishes the helper first, records its SHA-256 and bundles it inside the app. The release output is one `LazBisPatcher.exe`. Fixture builds use a local feed and test flags. Keep those builds off GitHub Releases.
 
-The portable launch check starts with only the EXE and checks the main screen, version, absence of notices UI and normal close. The fixture harness checks update and relaunch, failed-startup rollback, interrupted-swap recovery, helper extraction and repair, and unchanged disposable LazBis, config and database files. These local feed tests do not establish live GitHub update readiness.
+The portable launch check starts with only the EXE and checks the main screen, version, absence of notices UI and normal close. The fixture harness clicks Update Patcher and confirms the successful update, then checks relaunch, failed-startup rollback, interrupted-swap recovery, helper extraction and repair, and unchanged disposable LazBis, config and database files. These local feed tests do not establish live GitHub update readiness.
 
 The smoke suite needs the reviewed LazBis 1.0 ZIP. If it is not already available locally:
 
@@ -46,13 +50,13 @@ Run the smoke suite against the release EXE:
 dotnet run --project tests/LazBisPatcher.Smoke -c Release -- out\lazbis-1.0\lazbis.zip out\release-0.1.5\LazBisPatcher.exe
 ```
 
-The installer checks use the real pinned 1.0 ZIP and a generated LazBis 1.0.1 update. They cover adoption, repair, reinstall, hash rejection, rollback and user-file preservation. Executable checks inspect the candidate bytes and recovery records. Add `--live` as the final argument only when deliberately checking the real LazBis feed and installing into a disposable folder. Report network failures separately from local test results.
+The installer checks use the real pinned 1.0 ZIP for legacy compatibility and a generated LazBis 1.0.1 update. Source-feed checks cover a version bump, a push without a bump, main moving between check and download, pinned repair, legacy records, unavailable sources, bad blob identities, conflicts, rollback and player-file preservation. Executable checks inspect the candidate bytes and recovery records. Add `--live` as the final argument only when deliberately checking the real LazBis feed and installing into a disposable folder. Report network failures separately from local test results.
 
 If Windows blocks the unsigned build script, use `pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\Build-Preview.ps1 -Version 0.1.5`. For the build command with two version values, use `pwsh -NoProfile -ExecutionPolicy Bypass -Command "& .\scripts\Build-Preview.ps1 -Fixture -Version '0.1.5','0.1.6'"`. This affects that PowerShell process only.
 
 ## Release LazBisPatcher
 
-Upload exactly one `LazBisPatcher.exe` from the matching release build. It is both the player download and the self-update asset. Check its Windows x64 PE architecture, embedded version and SHA-256. Include release notes with a link to [runtime licenses and notices](docs/RUNTIME_NOTICES.md) at the documented source revision. The notes must identify the source used to build the EXE and any later documentation revision separately.
+Upload exactly one `LazBisPatcher.exe` from the matching release build. It is both the player download and the self-update asset. Check its Windows x64 PE architecture, embedded version and SHA-256. Include release notes with a link to [runtime licenses and notices](docs/RUNTIME_NOTICES.md) at the documented source revision. Keep the exact build commit, asset hash and test results in the maintainer verification record. Player release notes can stay short.
 
 For a new version with no existing release, set the matching version, retain `$sourceCommit` from the clean source checkout used for the build, and prepare the release notes file before running:
 
@@ -76,40 +80,22 @@ Compare the README's direct download with the verified EXE. For later public ver
 
 ## Releasing a LazBis update
 
-LazBis releases are separate from LazBisPatcher EXE releases. For example, to update LazBis from 1.0 to 1.0.1:
+For example, to update LazBis from 1.0 to 1.0.1:
 
-1. Set `meta.version` in `init.lua` to `1.0.1` for the in-game version. The patcher detects updates from the published GitHub tag `v1.0.1` in `ThatSolo/lazbis`, not from `meta.version`. Changing that Lua value alone does not publish an update. Keep the existing `1.0` release and its bytes unchanged.
-2. Prepare exactly one asset named `lazbis.zip` with the layout below. Keep the reviewed 13 paths in [LazBis10.json](src/LazBisPatcher.Core/LazBis10.json). Contents can change, but added, removed or renamed paths require inventory review and an updated patcher that supports them. Exclude player configuration, databases and local state.
-3. Write release notes for `v1.0.1`, upload the complete ZIP and wait for the upload to finish. Publish it as the latest stable release, not a draft or prerelease.
-4. Run the release validator, then test a fresh install and an update from a recorded 1.0 installation in disposable MacroQuest-shaped folders containing `lua` and `config`. Check that the patcher offers 1.0.1 and records it after installation. Verify player configuration, database and local file paths and hashes stay unchanged. Test repair if files need restoring. Stop LazBis and its background helper before applying changes.
+1. Change the literal `meta.version` in `init.lua` from `1.0` to `1.0.1`.
+2. Push or merge that change to `main` in `ThatSolo/lazbis` with the code intended for 1.0.1. The version bump and its code should land together so a player checking that commit receives the intended version.
 
-The ZIP must have one top-level `lazbis/` folder, with no extra wrapper or root files:
+That is the only release-specific work required in LazBis. No GitHub Release, tag, ZIP asset or workflow run is needed. `meta.version` is both the in-game version and the version the patcher compares. Do not reuse a version for different code that installed players should receive. Subsequent pushes without a bump will not update an existing verified copy; new installs can still select the current main commit.
 
-```text
-lazbis/
-  init.lua
-  bg.lua
-  bis.lua
-  spells.lua
-  bis.png
-  icon_lazbis.png
-  LICENSE
-  README.md
-  spoiler.txt
-  images/
-    dsk.png
-    need.png
-    sebilis.png
-    veksar.png
-```
+The supported paths remain the 13-file inventory in [LazBis10.json](src/LazBisPatcher.Core/LazBis10.json). The patcher fetches only those files. Added, removed or renamed managed paths still require coordination, inventory review and a patcher build that supports them. Player configuration, databases and untracked files remain outside that list.
 
-Validate the published LazBis release:
+For maintainer verification, this validator resolves the live main commit, checks its version and files, and installs into a disposable MacroQuest-shaped folder:
 
 ```powershell
 .\scripts\Test-Release.ps1 -Product LazBis
 ```
 
-The smoke suite's generated 1.0.1 fixture is useful local coverage, but does not replace validation and a disposable install of the actual published release.
+The smoke suite also tests a generated 1.0 to 1.0.1 update and older installation records. Stop LazBis and its background helper before applying any real installation changes. Keep patcher EXE releases in the separate section above.
 
 ## Recovery and safety limits
 

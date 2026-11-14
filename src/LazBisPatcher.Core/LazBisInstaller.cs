@@ -247,7 +247,11 @@ public sealed class LazBisInstaller
             throw new InvalidDataException("LazBisPatcher state directory has an unknown owner.");
     }
 
-    public static bool SameAsset(Release a, Release b) => a.Product == b.Product && a.ReleaseId == b.ReleaseId &&
+    // An unchanged version repairs from its recorded source, even if main has moved.
+    public static Release SelectForInstall(Release available, InstallState? installed) =>
+        installed is null || available.Version > installed.Release.Version ? available : installed.Release;
+
+    public static bool SameAsset(Release a, Release b) => a.Product == b.Product && a.Source?.Commit == b.Source?.Commit && a.ReleaseId == b.ReleaseId &&
         a.AssetId == b.AssetId && a.Tag == b.Tag && a.Version == b.Version && a.Bytes == b.Bytes && a.Sha256 == b.Sha256;
 }
 
