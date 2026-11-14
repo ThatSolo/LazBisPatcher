@@ -1,0 +1,67 @@
+[
+  {
+    "path": "bg.lua",
+    "bytes": 1129,
+    "sha256": "c4c229e5a2e9f90b75af6b130845557424d630343965cad4d08bf2a8d4f563ad"
+  },
+  {
+    "path": "bis.lua",
+    "bytes": 334686,
+    "sha256": "c1e798a77cf1273b6621bed043301a6bd58d06c78dc9199885f97f99e3d956ca"
+  },
+  {
+    "path": "bis.png",
+    "bytes": 245416,
+    "sha256": "6a31043f67dd05615a87320f5bdd2463464cd8b655fecabcfc54b14257ad1576"
+  },
+  {
+    "path": "icon_lazbis.png",
+    "bytes": 4251,
+    "sha256": "b9602f6de5e8a0e77a9bc9c8a33c1fd0949a431b60e072c66ab57ee78b501b25"
+  },
+  {
+    "path": "images/dsk.png",
+    "bytes": 172842,
+    "sha256": "6eb03713d340f7b0e75984a45ddc006e8400e27195de2b85d5bb950f30d680fd"
+  },
+  {
+    "path": "images/need.png",
+    "bytes": 28577,
+    "sha256": "603b47b213fb17716747b58384c33d1d1722c51a4ff71feef07c25684a25d9eb"
+  },
+  {
+    "path": "images/sebilis.png",
+    "bytes": 236963,
+    "sha256": "cc395ca955e43ad990010a1c41140a10d9f8cd4a1fc8e2c0987f10a6bb538edf"
+  },
+  {
+    "path": "images/veksar.png",
+    "bytes": 152755,
+    "sha256": "d835e57e651505b03d33d5b155a08234929fe9c3c7243e9155b66dd9884d7124"
+  },
+  {
+    "path": "init.lua",
+    "bytes": 209743,
+    "sha256": "206383c996b08fc6dd94f6049ddc615f65e4361c22db04a57eab645909033db5"
+  },
+  {
+    "path": "LICENSE",
+    "bytes": 1065,
+    "sha256": "40c3e9834be653dff00e5a394a643675eff182331e7c79fadab4b862380f19ad"
+  },
+  {
+    "path": "README.md",
+    "bytes": 6010,
+    "sha256": "94261b94d1f0e382c69cde242d0f02c8223736ab71ed9de074d27084ac2f717f"
+  },
+  {
+    "path": "spells.lua",
+    "bytes": 36671,
+    "sha256": "1495601fd6678e1c48cddec97e661c2f845c12c1db6bd7f96ec1d3c931e59aea"
+  },
+  {
+    "path": "spoiler.txt",
+    "bytes": 3120,
+    "sha256": "3c44d029627e63523a15f1cdba23bad7fe08472b655623fdf4e7f66f4ed8be90"
+  }
+]

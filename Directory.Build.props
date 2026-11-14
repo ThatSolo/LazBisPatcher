@@ -1,0 +1,10 @@
+<Project>
+  <PropertyGroup>
+    <Version Condition="'$(Version)' == ''">0.1.5</Version>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <DefineConstants Condition="'$(FixtureFeed)' == 'true'">$(DefineConstants);FIXTURE_FEED</DefineConstants>
+  </PropertyGroup>
+</Project>

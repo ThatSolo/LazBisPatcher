@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>LazBisPatcher</AssemblyName>
+    <ApplicationIcon>Assets/LazBis.ico</ApplicationIcon>
+    <DebugType>none</DebugType>
+    <PatcherRepository Condition="'$(PatcherRepository)' == ''">ThatSolo/LazBisPatcher</PatcherRepository>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="$(BundledHelperPath)" LogicalName="LazBisPatcher.BundledHelper.exe" Condition="'$(BundledHelperPath)' != ''" />
+    <EmbeddedResource Include="../../docs/notices/*.txt" Link="Notices/%(Filename)%(Extension)" />
+    <AssemblyMetadata Include="BundledHelperSha256" Value="$(BundledHelperSha256)" />
+    <Resource Include="Assets/LazBis.ico" />
+    <AssemblyMetadata Include="PatcherRepository" Value="$(PatcherRepository)" />
+    <ProjectReference Include="../LazBisPatcher.Core/LazBisPatcher.Core.csproj" />
+  </ItemGroup>
+  <Target Name="RequireBundledHelper" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(BundledHelperPath)') Or '$(BundledHelperSha256)' == ''" Text="Build with scripts/Build-Preview.ps1 to publish and pin the bundled helper first." />
+  </Target>
+</Project>

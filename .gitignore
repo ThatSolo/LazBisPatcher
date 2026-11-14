@@ -1,0 +1,8 @@
+**/bin/
+**/obj/
+out/
+.vs/
+*.user
+macroquest-folder.txt
+.lazbis-self-update/
+fixture-feed/
